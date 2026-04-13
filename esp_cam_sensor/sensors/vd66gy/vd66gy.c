@@ -464,8 +464,16 @@ static esp_err_t vd66gy_power_patch(esp_cam_sensor_device_t *dev)
         ESP_RETURN_ON_ERROR(ret, TAG, "patch");
     }
 
-    ret = vd66gy_boot_cmd(dev);
-    ESP_RETURN_ON_ERROR(ret, TAG, "boot");
+    uint32_t fsm_pp = 0;
+    ret = vd66gy_cci_read(dev->sccb_handle, REG_SYSTEM_FSM, &fsm_pp);
+    ESP_RETURN_ON_ERROR(ret, TAG, "read fsm for power_patch");
+
+    if ((uint8_t)fsm_pp != VD56G3_SYSTEM_FSM_SW_STBY) {
+        ret = vd66gy_boot_cmd(dev);
+        ESP_RETURN_ON_ERROR(ret, TAG, "boot");
+    } else {
+        ESP_LOGI(TAG, "FSM already SW_STBY after power (Cut3 fastboot path); skip ROM boot cmd");
+    }
 
     if (!p->is_fastboot) {
         ret = vd66gy_vtpatch_apply(dev);
