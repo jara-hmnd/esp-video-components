@@ -644,13 +644,17 @@ static esp_err_t vd66gy_stream_off(esp_cam_sensor_device_t *dev)
     return ret;
 }
 
-static const esp_cam_sensor_isp_info_t vd66gy_isp_info_default __attribute__((unused)) = {
+static const esp_cam_sensor_isp_info_t vd66gy_isp_info_default = {
     .isp_v1_info = {
         .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
         .pclk = 160800000,
         .vts = VD56G3_FRAME_LENGTH_DEF_60FPS,
         .hts = VD56G3_LINE_LENGTH_MIN,
-        .bayer_type = ESP_CAM_SENSOR_BAYER_GRBG,
+        /*
+         * Phase-2 color tuning: try GBRG Bayer order.
+         * Prior BGGR and RGGB trials produced purple cast / grid artifacts.
+         */
+        .bayer_type = ESP_CAM_SENSOR_BAYER_GBRG,
     }
 };
 
@@ -665,7 +669,7 @@ static const esp_cam_sensor_format_t vd66gy_formats[] = {
         .regs = NULL,
         .regs_size = 0,
         .fps = 60,
-        .isp_info = NULL,
+        .isp_info = &vd66gy_isp_info_default,
         .mipi_info = {
             .mipi_clk = 804000000ULL,
             .lane_num = 2,
