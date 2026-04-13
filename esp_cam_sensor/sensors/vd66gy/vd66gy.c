@@ -69,6 +69,20 @@ extern int vtpatch_area_nb;
 #define VD56G3_SYSTEM_FSM_SW_STBY       0x02
 #define VD56G3_SYSTEM_FSM_STREAMING     0x03
 
+static const char *vd66gy_fsm_name(uint8_t f)
+{
+    switch (f) {
+    case VD56G3_SYSTEM_FSM_READY_TO_BOOT:
+        return "READY_TO_BOOT";
+    case VD56G3_SYSTEM_FSM_SW_STBY:
+        return "SW_STBY";
+    case VD56G3_SYSTEM_FSM_STREAMING:
+        return "STREAMING";
+    default:
+        return "UNKNOWN";
+    }
+}
+
 #define VD56G3_CMD_ACK           0
 #define VD56G3_CMD_BOOT          1
 #define VD56G3_CMD_PATCH_SETUP   2
@@ -237,37 +251,53 @@ static esp_err_t vd66gy_write_array(esp_sccb_io_handle_t io, uint16_t reg, size_
 
 static esp_err_t vd66gy_poll_reg8(esp_sccb_io_handle_t io, uint32_t cci, uint8_t expect, int timeout_ms)
 {
+    uint32_t last = 0;
     for (int t = 0; t < timeout_ms; t++) {
         uint32_t v = 0;
         esp_err_t e = vd66gy_cci_read(io, cci, &v);
         if (e != ESP_OK) {
+            ESP_LOGE(TAG, "VID66GY_STREAM_FAIL: SCCB read reg 0x%04" PRIx32 " during poll: %s",
+                     cci & CCI_REG_ADDR_MASK, esp_err_to_name(e));
             return e;
         }
+        last = v;
         if ((uint8_t)v == expect) {
             return ESP_OK;
         }
         esp_rom_delay_us(1000);
     }
-    ESP_LOGE(TAG, "poll timeout reg 0x%04" PRIx32 " expect 0x%02x", cci & CCI_REG_ADDR_MASK, expect);
+    ESP_LOGE(TAG, "VID66GY_STREAM_FAIL: poll timeout reg 0x%04" PRIx32 " expect 0x%02x last 0x%02x",
+             cci & CCI_REG_ADDR_MASK, expect, (unsigned)(last & 0xff));
     return ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t vd66gy_wait_fsm(esp_sccb_io_handle_t io, uint8_t state, int timeout_ms)
 {
-    return vd66gy_poll_reg8(io, REG_SYSTEM_FSM, state, timeout_ms);
+    esp_err_t err = vd66gy_poll_reg8(io, REG_SYSTEM_FSM, state, timeout_ms);
+    if (err != ESP_OK) {
+        uint32_t fsm = 0;
+        if (vd66gy_cci_read(io, REG_SYSTEM_FSM, &fsm) == ESP_OK) {
+            uint8_t fb = (uint8_t)(fsm & 0xff);
+            ESP_LOGE(TAG, "VID66GY_STREAM_FAIL: FSM wait need %s (0x%02x) still %s (0x%02x)",
+                     vd66gy_fsm_name(state), state, vd66gy_fsm_name(fb), fb);
+        }
+    }
+    return err;
 }
 
-/* After power/reset, ROM reports READY_TO_BOOT; a warm module may already be in SW_STBY. */
+/* After power/reset, ROM reports READY_TO_BOOT; a warm module may already be in SW_STBY or STREAMING. */
 static esp_err_t vd66gy_wait_rom_ready(esp_sccb_io_handle_t io, int timeout_ms)
 {
     for (int t = 0; t < timeout_ms; t++) {
         uint32_t v = 0;
         esp_err_t e = vd66gy_cci_read(io, REG_SYSTEM_FSM, &v);
         if (e != ESP_OK) {
+            ESP_LOGE(TAG, "VID66GY_STREAM_FAIL: ROM wait read SYSTEM_FSM: %s", esp_err_to_name(e));
             return e;
         }
         uint8_t f = (uint8_t)v;
-        if (f == VD56G3_SYSTEM_FSM_READY_TO_BOOT || f == VD56G3_SYSTEM_FSM_SW_STBY) {
+        if (f == VD56G3_SYSTEM_FSM_READY_TO_BOOT || f == VD56G3_SYSTEM_FSM_SW_STBY ||
+            f == VD56G3_SYSTEM_FSM_STREAMING) {
             return ESP_OK;
         }
         esp_rom_delay_us(1000);
@@ -510,6 +540,15 @@ static esp_err_t vd66gy_apply_ae_defaults(esp_cam_sensor_device_t *dev)
     return ESP_OK;
 }
 
+#define VD66GY_RET_IO(expr, step) \
+    do { \
+        ret = (expr); \
+        if (ret != ESP_OK) { \
+            ESP_LOGE(TAG, "VID66GY_STREAM_FAIL: stream_on %s: %s", step, esp_err_to_name(ret)); \
+            return ret; \
+        } \
+    } while (0)
+
 static esp_err_t vd66gy_stream_on(esp_cam_sensor_device_t *dev)
 {
     vd66gy_priv_t *p = dev->priv;
@@ -522,135 +561,66 @@ static esp_err_t vd66gy_stream_on(esp_cam_sensor_device_t *dev)
     uint32_t link_hz = (lanes == 2) ? VD56G3_LINK_FREQ_DEF_2LANES : 750000000UL;
     unsigned csi_mbps = (unsigned)(link_hz * 2 / HZ_PER_MHZ);
 
-    esp_err_t ret = 0;
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_EXT_CLOCK, p->xclk_hz);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_CLK_PLL_PREDIV, p->pll_prediv);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_CLK_SYS_PLL_MULT, p->pll_mult);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    esp_err_t ret = ESP_OK;
 
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_FORMAT_CTRL, 8);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_OIF_CTRL, p->oif_ctrl);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_OIF_CSI_BITRATE, csi_mbps);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_OIF_IMG_CTRL, MIPI_CSI2_DT_RAW8);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_ISL_ENABLE, 0);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    ESP_LOGI(TAG, "stream_on: %ux%u @ %" PRIu32 " fps, %" PRIu32 " Hz xclk, lanes=%u CSI~%u Mbps",
+             (unsigned)fmt->width, (unsigned)fmt->height, (uint32_t)fmt->fps, p->xclk_hz, lanes, csi_mbps);
 
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_READOUT_CTRL, READOUT_NORMAL);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_EXT_CLOCK, p->xclk_hz), "REG_EXT_CLOCK");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_CLK_PLL_PREDIV, p->pll_prediv), "REG_CLK_PLL_PREDIV");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_CLK_SYS_PLL_MULT, p->pll_mult), "REG_CLK_SYS_PLL_MULT");
+
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_FORMAT_CTRL, 8), "REG_FORMAT_CTRL");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OIF_CTRL, p->oif_ctrl), "REG_OIF_CTRL");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OIF_CSI_BITRATE, csi_mbps), "REG_OIF_CSI_BITRATE");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OIF_IMG_CTRL, MIPI_CSI2_DT_RAW8), "REG_OIF_IMG_CTRL");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_ISL_ENABLE, 0), "REG_ISL_ENABLE");
+
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_READOUT_CTRL, READOUT_NORMAL), "REG_READOUT_CTRL");
 
     uint16_t crop_left = (VD56G3_NATIVE_WIDTH - fmt->width) / 2;
     uint16_t crop_top = (VD56G3_NATIVE_HEIGHT - fmt->height) / 2;
 
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_Y_START, crop_top);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_Y_END, crop_top + fmt->height - 1);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_X_START, crop_left);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_X_END, crop_left + fmt->width - 1);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_Y_START, 0);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_Y_END, fmt->height - 1);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_START_H, crop_left);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_END_H, crop_left + fmt->width - 1);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_START_V, 0);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_END_V, fmt->height - 1);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_Y_START, crop_top), "REG_Y_START");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_Y_END, crop_top + fmt->height - 1), "REG_Y_END");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_X_START, crop_left), "REG_OUT_ROI_X_START");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_X_END, crop_left + fmt->width - 1), "REG_OUT_ROI_X_END");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_Y_START, 0), "REG_OUT_ROI_Y_START");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OUT_ROI_Y_END, fmt->height - 1), "REG_OUT_ROI_Y_END");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_START_H, crop_left), "REG_AE_ROI_START_H");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_END_H, crop_left + fmt->width - 1), "REG_AE_ROI_END_H");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_START_V, 0), "REG_AE_ROI_START_V");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_END_V, fmt->height - 1), "REG_AE_ROI_END_V");
 
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_ORIENTATION, 0);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_DUSTER_CTRL, VD56G3_DUSTER_ENABLE_DEF_MODULES);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_DARKCAL_CTRL, VD56G3_DARKCAL_ENABLE);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_PATGEN_CTRL, 0);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_ORIENTATION, 0), "REG_ORIENTATION");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DUSTER_CTRL, VD56G3_DUSTER_ENABLE_DEF_MODULES), "REG_DUSTER_CTRL");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DARKCAL_CTRL, VD56G3_DARKCAL_ENABLE), "REG_DARKCAL_CTRL");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_PATGEN_CTRL, 0), "REG_PATGEN_CTRL");
 
     ret = vd66gy_apply_ae_defaults(dev);
     if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "VID66GY_STREAM_FAIL: stream_on apply_ae_defaults: %s", esp_err_to_name(ret));
         return ret;
     }
 
     ret = vd66gy_write_gpio_defaults(dev);
     if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "VID66GY_STREAM_FAIL: stream_on write_gpio_defaults: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    ret = vd66gy_cci_write(dev->sccb_handle, REG_STBY, VD56G3_CMD_START_STREAM);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_poll_reg8(dev->sccb_handle, REG_STBY, VD56G3_CMD_ACK, 500);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    ret = vd66gy_wait_fsm(dev->sccb_handle, VD56G3_SYSTEM_FSM_STREAMING, 3000);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_STBY, VD56G3_CMD_START_STREAM), "REG_STBY START_STREAM");
+    VD66GY_RET_IO(vd66gy_poll_reg8(dev->sccb_handle, REG_STBY, VD56G3_CMD_ACK, 500), "REG_STBY ack");
+    VD66GY_RET_IO(vd66gy_wait_fsm(dev->sccb_handle, VD56G3_SYSTEM_FSM_STREAMING, 3000), "FSM STREAMING");
 
     dev->stream_status = 1;
+    ESP_LOGI(TAG, "stream_on: sensor MIPI streaming (FSM=STREAMING)");
     return ESP_OK;
 }
+#undef VD66GY_RET_IO
 
-static esp_err_t vd66gy_stream_off(esp_cam_sensor_device_t *dev)
+/** Stop MIPI streaming and wait for SW_STBY (used from stream_off and from detect when FSM is stuck in STREAMING). */
+static esp_err_t vd66gy_stop_stream_to_sw_stby(esp_cam_sensor_device_t *dev)
 {
     esp_err_t ret = vd66gy_cci_write(dev->sccb_handle, REG_STREAMING, VD56G3_CMD_STOP_STREAM);
     ESP_RETURN_ON_ERROR(ret, TAG, "stop stream");
@@ -658,8 +628,16 @@ static esp_err_t vd66gy_stream_off(esp_cam_sensor_device_t *dev)
     ESP_RETURN_ON_ERROR(ret, TAG, "stop ack");
     ret = vd66gy_wait_fsm(dev->sccb_handle, VD56G3_SYSTEM_FSM_SW_STBY, 3000);
     ESP_RETURN_ON_ERROR(ret, TAG, "stby fsm");
-    dev->stream_status = 0;
     return ESP_OK;
+}
+
+static esp_err_t vd66gy_stream_off(esp_cam_sensor_device_t *dev)
+{
+    esp_err_t ret = vd66gy_stop_stream_to_sw_stby(dev);
+    if (ret == ESP_OK) {
+        dev->stream_status = 0;
+    }
+    return ret;
 }
 
 static const esp_cam_sensor_isp_info_t vd66gy_isp_info_default = {
@@ -882,6 +860,17 @@ esp_cam_sensor_device_t *vd66gy_detect(esp_cam_sensor_config_t *config)
     if (vd66gy_cci_read(dev->sccb_handle, REG_SYSTEM_FSM, &fsm_probe) != ESP_OK) {
         ESP_LOGE(TAG, "read FSM after power failed");
         goto err;
+    }
+    if ((uint8_t)fsm_probe == VD56G3_SYSTEM_FSM_STREAMING) {
+        ESP_LOGW(TAG, "FSM streaming at detect; stop stream to reach SW_STBY");
+        if (vd66gy_stop_stream_to_sw_stby(dev) != ESP_OK) {
+            ESP_LOGE(TAG, "stop stream before boot failed");
+            goto err;
+        }
+        if (vd66gy_cci_read(dev->sccb_handle, REG_SYSTEM_FSM, &fsm_probe) != ESP_OK) {
+            ESP_LOGE(TAG, "read FSM after stop stream failed");
+            goto err;
+        }
     }
     if ((uint8_t)fsm_probe == VD56G3_SYSTEM_FSM_READY_TO_BOOT) {
         if (vd66gy_boot_cmd(dev) != ESP_OK) {
