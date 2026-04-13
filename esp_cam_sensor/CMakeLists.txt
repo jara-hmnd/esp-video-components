@@ -36,6 +36,12 @@ if(CONFIG_CAMERA_OV5647)
     list(APPEND priv_include_dirs "sensors/ov5647/private_include")
 endif()
 
+if(CONFIG_CAMERA_VD66GY)
+    list(APPEND srcs "sensors/vd66gy/vd66gy.c")
+    list(APPEND include_dirs "sensors/vd66gy/include")
+    list(APPEND requires "st_vd66gy_fw")
+endif()
+
 if(CONFIG_CAMERA_SC2336)
     list(APPEND srcs "sensors/sc2336/sc2336.c")
     list(APPEND include_dirs "sensors/sc2336/include")
@@ -153,6 +159,10 @@ endif()
 
 if(CONFIG_CAMERA_OV5647_AUTO_DETECT_MIPI_INTERFACE_SENSOR)
     target_link_libraries(${COMPONENT_LIB} INTERFACE "-u ov5647_detect")
+endif()
+
+if(CONFIG_CAMERA_VD66GY_AUTO_DETECT_MIPI_INTERFACE_SENSOR)
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u vd66gy_detect")
 endif()
 
 if(CONFIG_CAMERA_SC2336_AUTO_DETECT_MIPI_INTERFACE_SENSOR OR CONFIG_CAMERA_SC2336_AUTO_DETECT_DVP_INTERFACE_SENSOR)

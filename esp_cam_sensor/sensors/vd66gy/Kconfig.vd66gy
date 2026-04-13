@@ -1,0 +1,34 @@
+menuconfig CAMERA_VD66GY
+    bool "ST VD66GY (VD56G3 family)"
+    default n
+    depends on SOC_MIPI_CSI_SUPPORTED
+    help
+        Enable support for the STMicroelectronics VD66GY global-shutter Bayer sensor
+        (I2C address 0x10). Requires GPL-2.0 firmware blobs in component st_vd66gy_fw.
+
+if CAMERA_VD66GY
+    menu "Auto detect VD66GY"
+        config CAMERA_VD66GY_AUTO_DETECT_MIPI_INTERFACE_SENSOR
+            bool "Detect for MIPI CSI interface sensor"
+            default n
+            help
+                When enabled, the VD66GY sensor is probed at address 0x10 on the MIPI CSI
+                SCCB bus at startup. Disable while using OV5647 on the same design.
+    endmenu
+
+    choice CAMERA_VD66GY_MIPI_DEFAULT_FMT
+        prompt "Default output format (MIPI CSI)"
+        default CAMERA_VD66GY_MIPI_RAW8_1120X1360
+        help
+            Default mode after detection. Based on ST Linux driver defaults (1120x1360, GRBG8).
+
+        config CAMERA_VD66GY_MIPI_RAW8_1120X1360
+            bool "RAW8 1120x1360 ~60fps, MIPI 2-lane, 24 MHz XCLK"
+    endchoice
+
+    config CAMERA_VD66GY_MIPI_IF_FORMAT_INDEX_DEFAULT
+        int
+        default 0 if CAMERA_VD66GY_MIPI_RAW8_1120X1360
+        help
+            Index into the sensor format table for MIPI default.
+endif
