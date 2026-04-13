@@ -62,6 +62,7 @@ static int esp_video_vfs_open(void *ctx, const char *path, int flags, int mode)
     if (ret != ESP_OK) {
         return esp_err_to_errno(ret);
     }
+    video->file_flags = flags;
 
     return video->id;
 }
@@ -111,6 +112,9 @@ static int esp_video_vfs_close(void *ctx, int fd)
     assert(video);
 
     ret = esp_video_close(video);
+    if (ret == ESP_OK) {
+        video->file_flags = O_RDONLY;
+    }
 
     return esp_err_to_errno(ret);
 }
@@ -125,7 +129,12 @@ static int esp_video_vfs_fcntl(void *ctx, int fd, int cmd, int arg)
 
     switch (cmd) {
     case F_GETFL:
-        ret = O_RDONLY;
+        ret = video->file_flags;
+        break;
+    case F_SETFL:
+        /* Keep access mode as O_RDONLY; update runtime status flags only. */
+        video->file_flags = O_RDONLY | (arg & O_NONBLOCK);
+        ret = 0;
         break;
     default:
         ret = -1;
@@ -155,7 +164,10 @@ static int esp_video_vfs_ioctl(void *ctx, int fd, int cmd, va_list args)
     assert(video);
 
     ret = esp_video_ioctl(video, cmd, args);
-
+    if (ret == ESP_ERR_TIMEOUT && cmd == VIDIOC_DQBUF) {
+        errno = EAGAIN;
+        return -1;
+    }
     return esp_err_to_errno(ret);
 }
 

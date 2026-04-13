@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/lock.h>
 #include "esp_heap_caps.h"
 #include "esp_video.h"
@@ -188,9 +189,12 @@ static esp_err_t esp_video_ioctl_dqbuf(struct esp_video *video, struct v4l2_buff
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (video->file_flags & O_NONBLOCK) {
+        ticks = 0;
+    }
     element = esp_video_recv_element(video, vbuf->type, ticks);
     if (!element) {
-        return ESP_FAIL;
+        return ESP_ERR_TIMEOUT;
     }
 
     vbuf->flags     = 0;

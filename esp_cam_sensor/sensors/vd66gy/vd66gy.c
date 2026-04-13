@@ -332,8 +332,11 @@ static esp_err_t vd66gy_prepare_clock_tree(vd66gy_priv_t *p, uint32_t xclk_hz)
     uint32_t pll_out = xclk_hz * p->pll_mult / p->pll_prediv;
     p->pixel_clock = pll_out / VD56G3_VT_CLOCK_DIV;
 
-    /* Default 2-lane CSI mapping: logical lanes 1,2 -> physical 0,1; polarities 0 */
-    p->oif_ctrl = 2u | (0u << 4) | (1u << 7);
+    /*
+     * 2-lane CSI mapping: logical lanes 1,2 -> physical 0,1.
+     * Trial profile: invert clock and both data lane polarities (STM32 middleware uses swap enables).
+     */
+    p->oif_ctrl = 2u | (1u << 3) | (0u << 4) | (1u << 6) | (1u << 7) | (1u << 9);
 
     return ESP_OK;
 }
@@ -563,8 +566,8 @@ static esp_err_t vd66gy_stream_on(esp_cam_sensor_device_t *dev)
 
     esp_err_t ret = ESP_OK;
 
-    ESP_LOGI(TAG, "stream_on: %ux%u @ %" PRIu32 " fps, %" PRIu32 " Hz xclk, lanes=%u CSI~%u Mbps",
-             (unsigned)fmt->width, (unsigned)fmt->height, (uint32_t)fmt->fps, p->xclk_hz, lanes, csi_mbps);
+    ESP_LOGI(TAG, "stream_on: %ux%u @ %" PRIu32 " fps, %" PRIu32 " Hz xclk, lanes=%u CSI~%u Mbps oif_ctrl=0x%04x",
+             (unsigned)fmt->width, (unsigned)fmt->height, (uint32_t)fmt->fps, p->xclk_hz, lanes, csi_mbps, p->oif_ctrl);
 
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_EXT_CLOCK, p->xclk_hz), "REG_EXT_CLOCK");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_CLK_PLL_PREDIV, p->pll_prediv), "REG_CLK_PLL_PREDIV");
@@ -609,6 +612,7 @@ static esp_err_t vd66gy_stream_on(esp_cam_sensor_device_t *dev)
         return ret;
     }
 
+    /* Linux reference sequence: stream start command is written to REG_STBY (0x0201). */
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_STBY, VD56G3_CMD_START_STREAM), "REG_STBY START_STREAM");
     VD66GY_RET_IO(vd66gy_poll_reg8(dev->sccb_handle, REG_STBY, VD56G3_CMD_ACK, 500), "REG_STBY ack");
     VD66GY_RET_IO(vd66gy_wait_fsm(dev->sccb_handle, VD56G3_SYSTEM_FSM_STREAMING, 3000), "FSM STREAMING");
@@ -640,7 +644,7 @@ static esp_err_t vd66gy_stream_off(esp_cam_sensor_device_t *dev)
     return ret;
 }
 
-static const esp_cam_sensor_isp_info_t vd66gy_isp_info_default = {
+static const esp_cam_sensor_isp_info_t vd66gy_isp_info_default __attribute__((unused)) = {
     .isp_v1_info = {
         .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
         .pclk = 160800000,
@@ -661,7 +665,7 @@ static const esp_cam_sensor_format_t vd66gy_formats[] = {
         .regs = NULL,
         .regs_size = 0,
         .fps = 60,
-        .isp_info = &vd66gy_isp_info_default,
+        .isp_info = NULL,
         .mipi_info = {
             .mipi_clk = 804000000ULL,
             .lane_num = 2,

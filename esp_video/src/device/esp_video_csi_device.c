@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <inttypes.h>
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_attr.h"
@@ -69,6 +70,17 @@ struct csi_video {
 };
 
 static const char *TAG = "csi_video";
+
+typedef struct {
+    uint32_t get_new_trans_calls;
+    uint32_t get_new_trans_empty;
+    uint32_t trans_finished_calls;
+    uint64_t trans_finished_bytes;
+    uint32_t done_buf_ok;
+    uint32_t done_buf_err;
+} csi_diag_counters_t;
+
+static csi_diag_counters_t s_csi_diag;
 
 static esp_err_t csi_get_input_frame_type(uint32_t sensor_fmt, cam_ctlr_color_t *csi_color, uint8_t *csi_in_bpp, uint32_t *in_fmt)
 {
@@ -246,6 +258,8 @@ static bool IRAM_ATTR csi_video_on_trans_finished(esp_cam_ctlr_handle_t handle, 
 {
     struct esp_video *video = (struct esp_video *)user_data;
     struct esp_video_param *param = CAPTURE_VIDEO_PARAM(video);
+    s_csi_diag.trans_finished_calls++;
+    s_csi_diag.trans_finished_bytes += trans->received_size;
 
     ESP_EARLY_LOGD(TAG, "size=%zu", trans->received_size);
 
@@ -253,7 +267,11 @@ static bool IRAM_ATTR csi_video_on_trans_finished(esp_cam_ctlr_handle_t handle, 
     struct csi_video *csi_video = VIDEO_PRIV_DATA(struct csi_video *, video);
     if (trans->buffer != csi_video->element->buffer) {
         if (!param->skip_count) {
-            CAPTURE_VIDEO_DONE_BUF(video, trans->buffer, trans->received_size);
+            if (CAPTURE_VIDEO_DONE_BUF(video, trans->buffer, trans->received_size) == ESP_OK) {
+                s_csi_diag.done_buf_ok++;
+            } else {
+                s_csi_diag.done_buf_err++;
+            }
         } else {
             CAPTURE_VIDEO_SKIP_BUF(video, trans->buffer);
         }
@@ -264,7 +282,11 @@ static bool IRAM_ATTR csi_video_on_trans_finished(esp_cam_ctlr_handle_t handle, 
     }
 #else
     if (!param->skip_count) {
-        CAPTURE_VIDEO_DONE_BUF(video, trans->buffer, trans->received_size);
+        if (CAPTURE_VIDEO_DONE_BUF(video, trans->buffer, trans->received_size) == ESP_OK) {
+            s_csi_diag.done_buf_ok++;
+        } else {
+            s_csi_diag.done_buf_err++;
+        }
     } else {
         CAPTURE_VIDEO_SKIP_BUF(video, trans->buffer);
     }
@@ -273,6 +295,13 @@ static bool IRAM_ATTR csi_video_on_trans_finished(esp_cam_ctlr_handle_t handle, 
         param->skip_count = (param->skip_count + 1) % param->skip_frames;
     }
 #endif
+    if (s_csi_diag.trans_finished_calls == 1 || (s_csi_diag.trans_finished_calls % 128) == 0) {
+        ESP_EARLY_LOGW(TAG,
+                       "CSI_diag: trans_finished=%" PRIu32 " bytes_total=%" PRIu64
+                       " done_ok=%" PRIu32 " done_err=%" PRIu32 " last_size=%u",
+                       s_csi_diag.trans_finished_calls, s_csi_diag.trans_finished_bytes,
+                       s_csi_diag.done_buf_ok, s_csi_diag.done_buf_err, (unsigned)trans->received_size);
+    }
 
     return true;
 }
@@ -281,6 +310,7 @@ static bool IRAM_ATTR csi_video_on_get_new_trans(esp_cam_ctlr_handle_t handle, e
 {
     struct esp_video_buffer_element *element;
     struct esp_video *video = (struct esp_video *)user_data;
+    s_csi_diag.get_new_trans_calls++;
 
     element = CAPTURE_VIDEO_GET_QUEUED_ELEMENT(video);
 #if CONFIG_ESP_VIDEO_DISABLE_MIPI_CSI_DRIVER_BACKUP_BUFFER
@@ -293,12 +323,21 @@ static bool IRAM_ATTR csi_video_on_get_new_trans(esp_cam_ctlr_handle_t handle, e
     }
 #else
     if (!element) {
+        s_csi_diag.get_new_trans_empty++;
+        if (s_csi_diag.get_new_trans_empty == 1 || (s_csi_diag.get_new_trans_empty % 64) == 0) {
+            ESP_EARLY_LOGW(TAG, "CSI_diag: get_new_trans empty queued buffer (calls=%" PRIu32 ", empty=%" PRIu32 ")",
+                           s_csi_diag.get_new_trans_calls, s_csi_diag.get_new_trans_empty);
+        }
         return false;
     }
 #endif
 
     trans->buffer = element->buffer;
     trans->buflen = ELEMENT_SIZE(element);
+    if (s_csi_diag.get_new_trans_calls == 1 || (s_csi_diag.get_new_trans_calls % 128) == 0) {
+        ESP_EARLY_LOGW(TAG, "CSI_diag: get_new_trans calls=%" PRIu32 " empty=%" PRIu32 " buflen=%u",
+                       s_csi_diag.get_new_trans_calls, s_csi_diag.get_new_trans_empty, (unsigned)trans->buflen);
+    }
 
     return true;
 }
@@ -415,6 +454,15 @@ static esp_err_t csi_video_start(struct esp_video *video, uint32_t type)
         .bk_buffer_dis = true,
 #endif
     };
+    memset(&s_csi_diag, 0, sizeof(s_csi_diag));
+    ESP_LOGW(TAG,
+             "CSI_diag: start cfg(h=%u,v=%u) fmt(w=%u,h=%u) lanes=%u lane_mbps=%u in_color=%d out_color=%d line_sync=%d bypass_isp=%d out_fmt=0x%08x",
+             (unsigned)csi_config.h_res, (unsigned)csi_config.v_res,
+             (unsigned)CAPTURE_VIDEO_GET_FORMAT_WIDTH(video), (unsigned)CAPTURE_VIDEO_GET_FORMAT_HEIGHT(video),
+             (unsigned)csi_config.data_lane_num,
+             (unsigned)csi_config.lane_bit_rate_mbps, (int)csi_config.input_data_color_type,
+             (int)csi_config.output_data_color_type, (int)csi_video->state.line_sync,
+             (int)csi_video->state.bypass_isp, (unsigned)CAPTURE_VIDEO_GET_FORMAT_PIXEL_FORMAT(video));
     ESP_GOTO_ON_ERROR(esp_cam_new_csi_ctlr(&csi_config, &csi_video->cam_ctrl_handle), exit_0, TAG, "failed to new CSI");
 
     esp_cam_ctlr_evt_cbs_t cam_ctrl_cbs = {
