@@ -94,7 +94,8 @@ static const char *vd66gy_fsm_name(uint8_t f)
 
 #define VD56G3_EXP_MODE_AUTO   0
 
-#define MIPI_CSI2_DT_RAW8 0x2a
+#define MIPI_CSI2_DT_RAW8  0x2a
+#define MIPI_CSI2_DT_RAW10 0x2b
 
 #define VD56G3_NATIVE_WIDTH         1124
 #define VD56G3_NATIVE_HEIGHT        1364
@@ -103,6 +104,11 @@ static const char *vd66gy_fsm_name(uint8_t f)
 #define VD56G3_EXPOSURE_MARGIN        75
 #define VD56G3_EXPOSURE_MIN           21
 #define VD56G3_EXPOSURE_DEFAULT       1420U
+#define VD56G3_DARKCAL_PEDESTAL_DEF   64
+#define VD56G3_AE_COMPILER_CONTROL_DEF 0x00
+#define VD56G3_AE_TARGET_DEF          30
+#define VD56G3_AE_STEP_PROPORTION_DEF 0x008C
+#define VD56G3_AE_LEAK_PROPORTION_DEF 0x2CCC
 
 #define VD56G3_LINK_FREQ_DEF_2LANES 402000000UL
 
@@ -139,11 +145,16 @@ static const char *vd66gy_fsm_name(uint8_t f)
 #define REG_ISL_ENABLE         CCI_REG8(0x0333)
 #define REG_DUSTER_CTRL        CCI_REG8(0x0318)
 #define REG_DARKCAL_CTRL       CCI_REG8(0x0340)
+#define REG_DARKCAL_PEDESTAL   CCI_REG16(0x0415)
 #define REG_PATGEN_CTRL        CCI_REG16(0x0400)
+#define REG_AE_COMPILER_CONTROL          CCI_REG8(0x0430)
 #define REG_EXP_MODE           CCI_REG8(0x044c)
 #define REG_AE_COLDSTART_COARSE_EXPOSURE CCI_REG16(0x042a)
 #define REG_AE_COLDSTART_ANALOG_GAIN     CCI_REG8(0x042c)
 #define REG_AE_COLDSTART_DIGITAL_GAIN    CCI_REG16(0x042e)
+#define REG_AE_TARGET_PERCENTAGE         CCI_REG16(0x043c)
+#define REG_AE_STEP_PROPORTION           CCI_REG16(0x043e)
+#define REG_AE_LEAK_PROPORTION           CCI_REG16(0x0440)
 #define REG_FRAME_LENGTH       CCI_REG16(0x0458)
 #define REG_Y_START            CCI_REG16(0x045a)
 #define REG_Y_END              CCI_REG16(0x045c)
@@ -157,6 +168,38 @@ static const char *vd66gy_fsm_name(uint8_t f)
 #define REG_AE_ROI_END_V       CCI_REG16(0x0438)
 #define REG_READOUT_CTRL       CCI_REG8(0x047e)
 #define READOUT_NORMAL         0x00
+/*
+ * ST vd6g mapping:
+ *   orientation 0:none        -> GRBG
+ *   orientation 1:mirror      -> RGGB
+ *   orientation 2:flip        -> BGGR
+ *   orientation 3:mirror+flip -> GBRG
+ *
+ * Scenario bookmark:
+ *   - Scenario 1 = orientation 1 + RGGB (strong green, some colors came through)
+ *   - Scenario 2 = orientation 2 + BGGR (current test)
+ */
+#define VD66GY_COLOR_SCENARIO 1
+
+#if VD66GY_COLOR_SCENARIO == 1
+#define VD66GY_ORIENTATION_MODE 1
+#define VD66GY_BAYER_TYPE ESP_CAM_SENSOR_BAYER_RGGB
+#define VD66GY_SCENARIO_NAME "Scenario 1 (mirror+RGGB)"
+#elif VD66GY_COLOR_SCENARIO == 2
+#define VD66GY_ORIENTATION_MODE 2
+#define VD66GY_BAYER_TYPE ESP_CAM_SENSOR_BAYER_BGGR
+#define VD66GY_SCENARIO_NAME "Scenario 2 (flip+BGGR)"
+#elif VD66GY_COLOR_SCENARIO == 3
+#define VD66GY_ORIENTATION_MODE 0
+#define VD66GY_BAYER_TYPE ESP_CAM_SENSOR_BAYER_GRBG
+#define VD66GY_SCENARIO_NAME "Scenario 3 (none+GRBG)"
+#elif VD66GY_COLOR_SCENARIO == 4
+#define VD66GY_ORIENTATION_MODE 3
+#define VD66GY_BAYER_TYPE ESP_CAM_SENSOR_BAYER_GBRG
+#define VD66GY_SCENARIO_NAME "Scenario 4 (mirror+flip+GBRG)"
+#else
+#error "VD66GY_COLOR_SCENARIO must be 1..4"
+#endif
 
 #define VT_REVISION_EXPECT 17
 
@@ -538,6 +581,14 @@ static esp_err_t vd66gy_apply_ae_defaults(esp_cam_sensor_device_t *dev)
     ESP_RETURN_ON_ERROR(ret, TAG, "ae cold again");
     ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_COLDSTART_DIGITAL_GAIN, 0x100);
     ESP_RETURN_ON_ERROR(ret, TAG, "ae cold dgain");
+    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_COMPILER_CONTROL, VD56G3_AE_COMPILER_CONTROL_DEF);
+    ESP_RETURN_ON_ERROR(ret, TAG, "ae compiler ctrl");
+    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_TARGET_PERCENTAGE, VD56G3_AE_TARGET_DEF);
+    ESP_RETURN_ON_ERROR(ret, TAG, "ae target pct");
+    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_STEP_PROPORTION, VD56G3_AE_STEP_PROPORTION_DEF);
+    ESP_RETURN_ON_ERROR(ret, TAG, "ae step prop");
+    ret = vd66gy_cci_write(dev->sccb_handle, REG_AE_LEAK_PROPORTION, VD56G3_AE_LEAK_PROPORTION_DEF);
+    ESP_RETURN_ON_ERROR(ret, TAG, "ae leak prop");
     ret = vd66gy_cci_write(dev->sccb_handle, REG_FRAME_LENGTH, VD56G3_FRAME_LENGTH_DEF_60FPS);
     ESP_RETURN_ON_ERROR(ret, TAG, "frame length");
     return ESP_OK;
@@ -568,15 +619,19 @@ static esp_err_t vd66gy_stream_on(esp_cam_sensor_device_t *dev)
 
     ESP_LOGI(TAG, "stream_on: %ux%u @ %" PRIu32 " fps, %" PRIu32 " Hz xclk, lanes=%u CSI~%u Mbps oif_ctrl=0x%04x",
              (unsigned)fmt->width, (unsigned)fmt->height, (uint32_t)fmt->fps, p->xclk_hz, lanes, csi_mbps, p->oif_ctrl);
+    ESP_LOGW(TAG, "color tuning %s: orientation=%u", VD66GY_SCENARIO_NAME, (unsigned)VD66GY_ORIENTATION_MODE);
 
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_EXT_CLOCK, p->xclk_hz), "REG_EXT_CLOCK");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_CLK_PLL_PREDIV, p->pll_prediv), "REG_CLK_PLL_PREDIV");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_CLK_SYS_PLL_MULT, p->pll_mult), "REG_CLK_SYS_PLL_MULT");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_ORIENTATION, VD66GY_ORIENTATION_MODE), "REG_ORIENTATION");
 
-    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_FORMAT_CTRL, 8), "REG_FORMAT_CTRL");
+    uint8_t pixel_depth = (fmt->format == ESP_CAM_SENSOR_PIXFORMAT_RAW10) ? 10 : 8;
+    uint8_t csi_data_type = (fmt->format == ESP_CAM_SENSOR_PIXFORMAT_RAW10) ? MIPI_CSI2_DT_RAW10 : MIPI_CSI2_DT_RAW8;
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_FORMAT_CTRL, pixel_depth), "REG_FORMAT_CTRL");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OIF_CTRL, p->oif_ctrl), "REG_OIF_CTRL");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OIF_CSI_BITRATE, csi_mbps), "REG_OIF_CSI_BITRATE");
-    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OIF_IMG_CTRL, MIPI_CSI2_DT_RAW8), "REG_OIF_IMG_CTRL");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_OIF_IMG_CTRL, csi_data_type), "REG_OIF_IMG_CTRL");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_ISL_ENABLE, 0), "REG_ISL_ENABLE");
 
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_READOUT_CTRL, READOUT_NORMAL), "REG_READOUT_CTRL");
@@ -595,9 +650,10 @@ static esp_err_t vd66gy_stream_on(esp_cam_sensor_device_t *dev)
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_START_V, 0), "REG_AE_ROI_START_V");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_AE_ROI_END_V, fmt->height - 1), "REG_AE_ROI_END_V");
 
-    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_ORIENTATION, 0), "REG_ORIENTATION");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_ORIENTATION, VD66GY_ORIENTATION_MODE), "REG_ORIENTATION");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DUSTER_CTRL, VD56G3_DUSTER_ENABLE_DEF_MODULES), "REG_DUSTER_CTRL");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DARKCAL_CTRL, VD56G3_DARKCAL_ENABLE), "REG_DARKCAL_CTRL");
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DARKCAL_PEDESTAL, VD56G3_DARKCAL_PEDESTAL_DEF), "REG_DARKCAL_PEDESTAL");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_PATGEN_CTRL, 0), "REG_PATGEN_CTRL");
 
     ret = vd66gy_apply_ae_defaults(dev);
@@ -651,17 +707,16 @@ static const esp_cam_sensor_isp_info_t vd66gy_isp_info_default = {
         .vts = VD56G3_FRAME_LENGTH_DEF_60FPS,
         .hts = VD56G3_LINE_LENGTH_MIN,
         /*
-         * Phase-2 color tuning: try GBRG Bayer order.
-         * Prior BGGR and RGGB trials produced purple cast / grid artifacts.
+         * Keep Bayer metadata aligned with VD66GY_ORIENTATION_MODE (ST mapping above).
          */
-        .bayer_type = ESP_CAM_SENSOR_BAYER_GBRG,
+        .bayer_type = VD66GY_BAYER_TYPE,
     }
 };
 
 static const esp_cam_sensor_format_t vd66gy_formats[] = {
     {
-        .name = "MIPI_2lane_24Minput_RAW8_1120x1360_60fps",
-        .format = ESP_CAM_SENSOR_PIXFORMAT_RAW8,
+        .name = "MIPI_2lane_24Minput_RAW10_1120x1360_60fps",
+        .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
         .port = ESP_CAM_SENSOR_MIPI_CSI,
         .xclk = 24000000,
         .width = 1120,
