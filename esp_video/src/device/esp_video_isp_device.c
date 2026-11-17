@@ -643,7 +643,7 @@ static void isp_init_awb_param(struct isp_video *isp_video, esp_isp_awb_config_t
 static esp_err_t isp_start_awb(struct isp_video *isp_video)
 {
     esp_err_t ret;
-    esp_isp_awb_config_t awb_config;
+    esp_isp_awb_config_t awb_config = {0};
     esp_isp_awb_cbs_t awb_cb = {
         .on_statistics_done = isp_awb_stats_done,
     };
@@ -675,7 +675,7 @@ fail_0:
 static esp_err_t isp_reconfigure_awb(struct isp_video *isp_video)
 {
     if (isp_video->awb_started) {
-        esp_isp_awb_config_t awb_config;
+        esp_isp_awb_config_t awb_config = {0};
 
         isp_init_awb_param(isp_video, &awb_config);
 
@@ -778,7 +778,7 @@ static void isp_init_ccm_param(struct isp_video *isp_video, esp_isp_ccm_config_t
 
 static esp_err_t isp_start_ccm(struct isp_video *isp_video)
 {
-    esp_isp_ccm_config_t ccm_config;
+    esp_isp_ccm_config_t ccm_config = {0};
 
     if (isp_video->ccm_started) {
         return ESP_OK;
@@ -794,7 +794,7 @@ static esp_err_t isp_start_ccm(struct isp_video *isp_video)
 
 static esp_err_t isp_reconfig_ccm(struct isp_video *isp_video)
 {
-    esp_isp_ccm_config_t ccm_config;
+    esp_isp_ccm_config_t ccm_config = {0};
 
     isp_init_ccm_param(isp_video, &ccm_config);
     ESP_RETURN_ON_ERROR(esp_isp_ccm_configure(isp_video->isp_proc, &ccm_config), TAG, "failed to configure CCM");
@@ -904,7 +904,7 @@ static void isp_init_sharpen_param(struct isp_video *isp_video, esp_isp_sharpen_
 
 static esp_err_t isp_start_sharpen(struct isp_video *isp_video)
 {
-    esp_isp_sharpen_config_t sharpen_config;
+    esp_isp_sharpen_config_t sharpen_config = {0};
 
     if (isp_video->sharpen_started) {
         return ESP_OK;
@@ -920,7 +920,7 @@ static esp_err_t isp_start_sharpen(struct isp_video *isp_video)
 
 static esp_err_t isp_reconfig_sharpen(struct isp_video *isp_video)
 {
-    esp_isp_sharpen_config_t sharpen_config;
+    esp_isp_sharpen_config_t sharpen_config = {0};
 
     isp_init_sharpen_param(isp_video, &sharpen_config);
     ESP_RETURN_ON_ERROR(esp_isp_sharpen_configure(isp_video->isp_proc, &sharpen_config), TAG, "failed to configure sharpen");
@@ -1011,7 +1011,7 @@ static void isp_init_demosaic_param(struct isp_video *isp_video, esp_isp_demosai
 
 static esp_err_t isp_start_demosaic(struct isp_video *isp_video)
 {
-    esp_isp_demosaic_config_t demosaic_config;
+    esp_isp_demosaic_config_t demosaic_config = {0};
 
     if (isp_video->demosaic_started) {
         return ESP_OK;
@@ -1027,7 +1027,7 @@ static esp_err_t isp_start_demosaic(struct isp_video *isp_video)
 
 static esp_err_t isp_reconfigure_demosaic(struct isp_video *isp_video)
 {
-    esp_isp_demosaic_config_t demosaic_config;
+    esp_isp_demosaic_config_t demosaic_config = {0};
 
     isp_init_demosaic_param(isp_video, &demosaic_config);
     ESP_RETURN_ON_ERROR(esp_isp_demosaic_configure(isp_video->isp_proc, &demosaic_config), TAG, "failed to configure demosaic");
@@ -1083,8 +1083,10 @@ static esp_err_t isp_start_wbg(struct isp_video *isp_video)
     uint32_t wbg_r = isp_video->red_balance_gain * (1 << ESP_VIDEO_ISP_WBG_DEC_BITS);
     uint32_t wbg_b = isp_video->blue_balance_gain * (1 << ESP_VIDEO_ISP_WBG_DEC_BITS);
 
-    esp_isp_wbg_config_t wbg_cfg;
-    memset(&wbg_cfg, 0, sizeof(esp_isp_wbg_config_t));
+    /* Gains are written before streaming starts, so no VSYNC will latch a deferred update. */
+    esp_isp_wbg_config_t wbg_cfg = {
+        .flags.update_once_configured = 1,
+    };
     ESP_RETURN_ON_ERROR(esp_isp_wbg_configure(isp_video->isp_proc, &wbg_cfg), TAG, "failed to configure wbg");
     ESP_RETURN_ON_ERROR(esp_isp_wbg_enable(isp_video->isp_proc), TAG, "failed to enable wbg");
 

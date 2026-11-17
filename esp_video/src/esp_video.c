@@ -767,7 +767,10 @@ esp_err_t esp_video_get_format(struct esp_video *video, struct v4l2_format *form
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* stream->format.type is only populated by a successful set_format, so keep the caller's type. */
+    uint32_t type = format->type;
     memcpy(format, &stream->format, sizeof(struct v4l2_format));
+    format->type = type;
 
     return ESP_OK;
 }

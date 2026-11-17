@@ -31,4 +31,18 @@ if CAMERA_VD66GY
         default 0 if CAMERA_VD66GY_MIPI_RAW8_1120X1360
         help
             Index into the sensor format table for MIPI default.
+
+    config CAMERA_VD66GY_TEST_PATTERN_ENABLE
+        bool "Enable VD66GY test pattern at stream start"
+        default n
+        help
+            Writes REG_PATGEN_CTRL with CAMERA_VD66GY_TEST_PATTERN_VALUE when streaming starts.
+            Keep disabled for normal camera operation.
+
+    config CAMERA_VD66GY_TEST_PATTERN_VALUE
+        hex "VD66GY REG_PATGEN_CTRL value"
+        default 0x0001
+        depends on CAMERA_VD66GY_TEST_PATTERN_ENABLE
+        help
+            Raw register value written to REG_PATGEN_CTRL (0x0400) for internal sensor pattern generation.
 endif

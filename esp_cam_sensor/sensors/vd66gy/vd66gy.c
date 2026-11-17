@@ -638,7 +638,12 @@ static esp_err_t vd66gy_stream_on(esp_cam_sensor_device_t *dev)
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DUSTER_CTRL, VD56G3_DUSTER_ENABLE_DEF_MODULES), "REG_DUSTER_CTRL");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DARKCAL_CTRL, VD56G3_DARKCAL_ENABLE), "REG_DARKCAL_CTRL");
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_DARKCAL_PEDESTAL, VD56G3_DARKCAL_PEDESTAL_DEF), "REG_DARKCAL_PEDESTAL");
+#if CONFIG_CAMERA_VD66GY_TEST_PATTERN_ENABLE
+    VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_PATGEN_CTRL, CONFIG_CAMERA_VD66GY_TEST_PATTERN_VALUE), "REG_PATGEN_CTRL");
+    ESP_LOGW(TAG, "VD66GY test pattern enabled: REG_PATGEN_CTRL=0x%04x", CONFIG_CAMERA_VD66GY_TEST_PATTERN_VALUE);
+#else
     VD66GY_RET_IO(vd66gy_cci_write(dev->sccb_handle, REG_PATGEN_CTRL, 0), "REG_PATGEN_CTRL");
+#endif
 
     ret = vd66gy_apply_ae_defaults(dev);
     if (ret != ESP_OK) {

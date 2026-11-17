@@ -42,9 +42,9 @@
 /* AEG-1488 */
 #define CSI_BYTE_SWAP_EN            false
 
-#define CSI_DEFAULT_OUT_COLOR       CAM_CTLR_COLOR_RGB565
-#define CSI_DEFAULT_OUT_BPP         16
-#define V4L2_DEFAULT_OUT_COLOR      V4L2_PIX_FMT_RGB565
+#define CSI_DEFAULT_OUT_COLOR       CAM_CTLR_COLOR_RAW8
+#define CSI_DEFAULT_OUT_BPP         8
+#define V4L2_DEFAULT_OUT_COLOR      V4L2_PIX_FMT_SBGGR8
 
 struct csi_video {
     esp_video_csi_state_t state;
@@ -136,14 +136,23 @@ static esp_err_t csi_get_output_frame_type_from_v4l2(uint32_t output_fmt, cam_ct
 
     switch (output_fmt) {
     case V4L2_PIX_FMT_SBGGR8:
+    case V4L2_PIX_FMT_SGBRG8:
+    case V4L2_PIX_FMT_SGRBG8:
+    case V4L2_PIX_FMT_SRGGB8:
         *csi_color = CAM_CTLR_COLOR_RAW8;
         *out_bpp = 8;
         break;
     case V4L2_PIX_FMT_SBGGR10:
+    case V4L2_PIX_FMT_SGBRG10:
+    case V4L2_PIX_FMT_SGRBG10:
+    case V4L2_PIX_FMT_SRGGB10:
         *csi_color = CAM_CTLR_COLOR_RAW10;
         *out_bpp = 10;
         break;
     case V4L2_PIX_FMT_SBGGR12:
+    case V4L2_PIX_FMT_SGBRG12:
+    case V4L2_PIX_FMT_SGRBG12:
+    case V4L2_PIX_FMT_SRGGB12:
         *csi_color = CAM_CTLR_COLOR_RAW12;
         *out_bpp = 12;
         break;
