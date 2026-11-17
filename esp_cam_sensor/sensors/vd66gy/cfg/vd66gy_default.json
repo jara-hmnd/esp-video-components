@@ -131,10 +131,10 @@
                     {
                         "gain": 1,
                         "blc_param": {
-                            "blc_top_left": 64,
-                            "blc_top_right": 64,
-                            "blc_bottom_left": 64,
-                            "blc_bottom_right": 65
+                            "blc_top_left": 16,
+                            "blc_top_right": 16,
+                            "blc_bottom_left": 16,
+                            "blc_bottom_right": 16
                         }
                     }
                 ]

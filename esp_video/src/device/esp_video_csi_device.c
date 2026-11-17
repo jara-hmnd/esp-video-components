@@ -368,7 +368,8 @@ static esp_err_t init_config(struct esp_video *video)
     csi_video->state.lane_bitrate_mbps = sensor_format.mipi_info.mipi_clk / (1000 * 1000);
 
     if (sensor_format.isp_info) {
-        csi_video->state.bypass_isp = false;
+        /* Raw-in/raw-out must not pass through the ISP, which alters the samples. */
+        csi_video->state.bypass_isp = (CSI_DEFAULT_OUT_COLOR == csi_video->state.in_color);
 
         csi_video->state.out_color = CSI_DEFAULT_OUT_COLOR;
         csi_video->state.out_bpp = CSI_DEFAULT_OUT_BPP;
